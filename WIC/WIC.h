@@ -3,6 +3,7 @@
  * @brief Definiton of class Image which provide functionality for image processing.
  */
 #pragma once
+#include "Common.h"
 
 namespace WIC
 {
@@ -72,30 +73,8 @@ namespace WIC
 
 namespace WIC
 {
-	enum class EImageType : std::int8_t
-	{
-		Unknown = 0,
-		Bmp = 1,
-		Jpeg = 2,
-		Gif = 3,
-		Tiff = 4,
-		Png = 5,
-		Ico = 6,
-	};
-
-
-	class Exception final : public std::runtime_error
-	{
-		using std::runtime_error::runtime_error;
-	};
-
-
 	class Image
 	{
-		static constexpr auto fmt = "{}==>{} failed with error [{:#08x}]";
-
-		static std::string GetErrorMsg(std::string_view method, HRESULT errorCode, const std::source_location& location = std::source_location::current());
-
 	public:
 		Image(const Image& image);
 		Image& operator=(const Image& image);
@@ -121,9 +100,9 @@ namespace WIC
 
 		void Scale(unsigned int width, unsigned int height);
 
-		[[nodiscard]] std::tuple<uint32_t, uint32_t> GetImageSize() const;
+		[[nodiscard]] std::tuple<uint32_t, uint32_t> Size() const;
 
-		EImageType GetImageType() const;
+		EImageType Type() const;
 
 		void SaveToFile(const std::filesystem::path& destination, EImageType type = EImageType::Unknown, int imageQuality = 0) const;
 
@@ -136,25 +115,11 @@ namespace WIC
 
 		static Microsoft::WRL::ComPtr<IWICImagingFactory> CreateFactory();
 
-		static EImageType GetImageType(const Microsoft::WRL::ComPtr<IWICBitmapDecoder>& decoder);
-
 		EImageType SelectEncoderImageType(EImageType type) const;
 
 		void CreateWicBitmap(const Microsoft::WRL::ComPtr<IWICBitmapDecoder>& decoder);
 
-		Microsoft::WRL::ComPtr<IWICStream> GetStream(const Microsoft::WRL::ComPtr<IStream>& buffer) const;
-
-		Microsoft::WRL::ComPtr<IWICStream> GetStream() const;
-
-		Microsoft::WRL::ComPtr<IWICStream> GetStream(const std::filesystem::path& source) const;
-
-		Microsoft::WRL::ComPtr<IWICStream> GetStream(std::vector<uint8_t>& source) const;
-
 		static Microsoft::WRL::ComPtr<IWICBitmapEncoder> GetEncoder(const Microsoft::WRL::ComPtr<IWICStream>& stream, EImageType type);
-
-		Microsoft::WRL::ComPtr<IWICBitmapDecoder> GetDecoder(const Microsoft::WRL::ComPtr<IWICStream>& stream);
-
-		Microsoft::WRL::ComPtr<IWICBitmapDecoder> GetDecoder(const std::filesystem::path& path);
 
 		static void SetImageQuality(int imageQuality, const Microsoft::WRL::ComPtr<IPropertyBag2>& properties);
 

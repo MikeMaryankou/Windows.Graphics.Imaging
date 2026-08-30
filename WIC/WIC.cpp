@@ -5,6 +5,9 @@
 
 #include "pch.h"
 #include "WIC.h"
+#include "Decoder.h"
+#include "Stream.h"
+#include "Common.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -19,15 +22,6 @@ namespace
 		{WIC::EImageType::Jpeg, CLSID_WICJpegEncoder},
 		{WIC::EImageType::Png, CLSID_WICPngEncoder},
 		{WIC::EImageType::Tiff, CLSID_WICTiffEncoder},
-	};
-
-	const std::map<WIC::EImageType, IID> g_imageTypeDecoderDictionary =
-	{
-		{WIC::EImageType::Bmp, CLSID_WICBmpDecoder},
-		{WIC::EImageType::Gif, CLSID_WICGifDecoder},
-		{WIC::EImageType::Jpeg, CLSID_WICJpegDecoder},
-		{WIC::EImageType::Png, CLSID_WICPngDecoder},
-		{WIC::EImageType::Tiff, CLSID_WICTiffDecoder},
 	};
 }
 
@@ -63,12 +57,6 @@ Image::~Image()
 }
 
 
-std::string Image::GetErrorMsg(std::string_view method, const HRESULT errorCode, const std::source_location& location)
-{
-	return std::format(fmt, location.function_name(), method, static_cast<unsigned long>(errorCode));
-}
-
-
 void Image::Dispose()
 {
 	if (m_bitmap != nullptr)
@@ -94,41 +82,6 @@ ComPtr<IWICImagingFactory> Image::CreateFactory()
 	}
 
 	return factory;
-}
-
-
-EImageType Image::GetImageType(const ComPtr<IWICBitmapDecoder>& decoder) noexcept(false)
-{
-	ComPtr<IWICBitmapDecoderInfo> info = nullptr;
-
-	if (const HRESULT res = decoder->GetDecoderInfo(info.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Decoder::GetDecoderInfo", res));
-	}
-
-	CLSID sid = {};
-
-	if (const HRESULT res = info->GetCLSID(&sid); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("DecoderInfo::GetCLSID", res));
-	}
-
-	for (const auto& [type, guid] : g_imageTypeDecoderDictionary)
-	{
-		if (guid == sid)
-		{
-			return type;
-		}
-	}
-
-	auto stringFromGuid = [](const GUID guid)
-		{
-			return std::format("{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-				guid.Data1, guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1],
-				guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
-		};
-
-	throw Exception(std::format("DecoderInfo return unsupported sid [{}]", stringFromGuid(sid)));
 }
 
 
@@ -188,7 +141,7 @@ Image::Image(std::vector<uint8_t>& bytes)
 	m_comInitializer.Initialize();
 	m_factory = CreateFactory();
 
-	CreateWicBitmap(GetDecoder(GetStream(bytes)));
+	CreateWicBitmap(GetDecoder(m_factory, GetStream(m_factory, bytes)));
 }
 
 
@@ -197,7 +150,10 @@ Image::Image(const ComPtr<IStream>& stream)
 	m_comInitializer.Initialize();
 	m_factory = CreateFactory();
 
-	CreateWicBitmap(GetDecoder(GetStream(stream)));
+	const auto decoder = GetDecoder(m_factory, GetStream(m_factory, stream));
+	m_imageType = GetImageType(decoder);
+
+	CreateWicBitmap(decoder);
 }
 
 
@@ -206,7 +162,10 @@ Image::Image(const std::filesystem::path& path)
 	m_comInitializer.Initialize();
 	m_factory = CreateFactory();
 
-	CreateWicBitmap(GetDecoder(path));
+	const auto decoder = GetDecoder(m_factory, path);
+	m_imageType = GetImageType(decoder);
+
+	CreateWicBitmap(GetDecoder(m_factory, path));
 }
 
 
@@ -259,7 +218,7 @@ void Image::ConvertToGrayscale()
 }
 
 
-std::tuple<uint32_t, uint32_t> Image::GetImageSize() const
+std::tuple<uint32_t, uint32_t> Image::Size() const
 {
 	uint32_t width = 0;
 	uint32_t height = 0;
@@ -273,7 +232,7 @@ std::tuple<uint32_t, uint32_t> Image::GetImageSize() const
 }
 
 
-EImageType Image::GetImageType() const
+EImageType Image::Type() const
 {
 	return m_imageType;
 }
@@ -282,7 +241,7 @@ EImageType Image::GetImageType() const
 void Image::SaveToFile(const std::filesystem::path& destination, const EImageType type, const int imageQuality) const
 {
 	const EImageType encoderImageType = SelectEncoderImageType(type);
-	const ComPtr<IWICStream> outputStream = GetStream(destination);
+	const ComPtr<IWICStream> outputStream = GetStream(m_factory, destination);
 	const ComPtr<IWICBitmapEncoder> encoder = GetEncoder(outputStream, encoderImageType);
 
 	SaveEncoderData(encoder, imageQuality);
@@ -303,7 +262,7 @@ void Image::Scale(const unsigned int width, const unsigned int height)
 		throw Exception(GetErrorMsg("BitmapScaler::Initialize", res));
 	}
 
-	const ComPtr<IWICStream> outputStream = GetStream();
+	const ComPtr<IWICStream> outputStream = GetStream(m_factory);
 	const ComPtr<IWICBitmapEncoder> encoder = GetEncoder(outputStream, SelectEncoderImageType(m_imageType));
 
 	SaveEncoderData(encoder, scaledBitmap);
@@ -320,7 +279,7 @@ void Image::Scale(const unsigned int width, const unsigned int height)
 void Image::SaveToBuffer(std::vector<uint8_t>& buffer, const EImageType type, const int imageQuality) const
 {
 	const EImageType encoderImageType = SelectEncoderImageType(type);
-	const ComPtr<IWICStream> stream = GetStream();
+	const ComPtr<IWICStream> stream = GetStream(m_factory);
 	const ComPtr<IWICBitmapEncoder> encoder = GetEncoder(stream, encoderImageType);
 
 	SaveEncoderData(encoder, encoderImageType, imageQuality);
@@ -360,7 +319,7 @@ void Image::SaveToBufferDetails(std::vector<uint8_t>& buffer, const ComPtr<IWICS
 void Image::SaveToBuffer(std::vector<char>& buffer, const EImageType type, const int imageQuality) const
 {
 	const EImageType encoderImageType = SelectEncoderImageType(type);
-	const ComPtr<IWICStream> stream = GetStream();
+	const ComPtr<IWICStream> stream = GetStream(m_factory);
 	const ComPtr<IWICBitmapEncoder> encoder = GetEncoder(stream, encoderImageType);
 
 	SaveEncoderData(encoder, encoderImageType, imageQuality);
@@ -397,86 +356,6 @@ void Image::SaveToBufferDetails(std::vector<char>& buffer, const ComPtr<IWICStre
 }
 
 
-ComPtr<IWICStream> Image::GetStream(const ComPtr<IStream>& buffer) const
-{
-	ComPtr<IWICStream> stream = nullptr;
-
-	if (const HRESULT res = m_factory->CreateStream(stream.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Factory::CreateStream", res));
-	}
-
-	if (const HRESULT res = stream->InitializeFromIStream(buffer.Get()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Stream::InitializeFromIStream", res));
-	}
-
-	return stream;
-}
-
-
-ComPtr<IWICStream> Image::GetStream() const
-{
-	ComPtr<IWICStream> stream = nullptr;
-
-	if (const HRESULT res = m_factory->CreateStream(stream.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Factory::CreateStream", res));
-	}
-
-	ComPtr<IStream> buffer;
-
-	if (const HRESULT res = CreateStreamOnHGlobal(nullptr, true, buffer.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("CreateStreamOnHGlobal", res));
-	}
-
-	if (const HRESULT res = stream->InitializeFromIStream(buffer.Get()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Stream::InitializeFromIStream", res));
-	}
-
-	return stream;
-}
-
-
-ComPtr<IWICStream> Image::GetStream(const std::filesystem::path& source) const
-{
-	ComPtr<IWICStream> stream = nullptr;
-
-	if (const HRESULT res = m_factory->CreateStream(stream.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Factory::InitializeFromIStream", res));
-	}
-
-	if (const HRESULT res = stream->InitializeFromFilename(source.c_str(), GENERIC_WRITE); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Stream::InitializeFromFilename", res));
-	}
-
-	return stream;
-}
-
-
-ComPtr<IWICStream> Image::GetStream(std::vector<uint8_t>& source) const
-{
-	ComPtr<IWICStream> stream = nullptr;
-
-	if (const HRESULT res = m_factory->CreateStream(stream.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Factory::InitializeFromIStream", res));
-	}
-
-	if (const HRESULT res = stream->InitializeFromMemory(source.data(), static_cast<unsigned long>(source.size()));
-		FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Stream::InitializeFromMemory", res));
-	}
-
-	return stream;
-}
-
-
 ComPtr<IWICBitmapEncoder> Image::GetEncoder(const ComPtr<IWICStream>& stream, const EImageType type)
 {
 	ComPtr<IWICBitmapEncoder> encoder = nullptr;
@@ -493,53 +372,6 @@ ComPtr<IWICBitmapEncoder> Image::GetEncoder(const ComPtr<IWICStream>& stream, co
 	}
 
 	return encoder;
-}
-
-
-ComPtr<IWICBitmapDecoder> Image::GetDecoder(const ComPtr<IWICStream>& stream)
-{
-	for (const auto& [type, guid] : g_imageTypeDecoderDictionary)
-	{
-		ComPtr<IWICBitmapDecoder> decoder = nullptr;
-
-		if (const HRESULT res = ::CoCreateInstance(guid, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(decoder.GetAddressOf())); FAILED(res))
-		{
-			continue;
-		}
-
-		if (const HRESULT res = decoder->Initialize(stream.Get(), WICDecodeMetadataCacheOnLoad); SUCCEEDED(res))
-		{
-			m_imageType = type;
-			return decoder;
-		}
-	}
-
-	ComPtr<IWICBitmapDecoder> decoder = nullptr;
-
-	if (const HRESULT res = m_factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf());
-		FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Factory::CreateDecoderFromStream", res));
-	}
-
-	m_imageType = GetImageType(decoder);
-	return decoder;
-}
-
-
-ComPtr<IWICBitmapDecoder> Image::GetDecoder(const std::filesystem::path& path)
-{
-	ComPtr<IWICBitmapDecoder> decoder = nullptr;
-
-	if (const HRESULT res = m_factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf()); 
-		FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Factory::CreateDecoderFromStream", res));
-	}
-
-	m_imageType = GetImageType(decoder);
-
-	return decoder;
 }
 
 

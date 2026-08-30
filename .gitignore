@@ -67,3 +67,20 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+
+# Временные файлы и кэш Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Папки сборки и временные файлы компилятора MSVC (C++)
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.tlog
+*.recipe
+*.lastbuildstate

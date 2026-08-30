@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="WIC/WIC.vcxproj" Id="a6501a70-27b7-41b3-b013-51a7a73111ce" />
+</Solution>

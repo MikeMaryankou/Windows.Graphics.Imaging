@@ -5,6 +5,7 @@
 
 #include "pch.h"
 #include "WIC.h"
+#include "Encoder.h"
 #include "Decoder.h"
 #include "Stream.h"
 #include "Common.h"
@@ -12,18 +13,6 @@
 using Microsoft::WRL::ComPtr;
 
 using namespace WIC;
-
-namespace
-{
-	const std::map<WIC::EImageType, IID> g_imageTypeEncoderDictionary =
-	{
-		{WIC::EImageType::Bmp, CLSID_WICBmpEncoder},
-		{WIC::EImageType::Gif, CLSID_WICGifEncoder},
-		{WIC::EImageType::Jpeg, CLSID_WICJpegEncoder},
-		{WIC::EImageType::Png, CLSID_WICPngEncoder},
-		{WIC::EImageType::Tiff, CLSID_WICTiffEncoder},
-	};
-}
 
 
 Image::Image(const Image& image)
@@ -40,7 +29,7 @@ Image& Image::operator=(const Image& image)
 {
 	if (this != &image)
 	{
-		//m_comInitializer.Initialize();
+		m_comInitializer.Initialize();
 
 		m_imageType = image.m_imageType;
 		m_factory = image.m_factory;
@@ -242,9 +231,11 @@ void Image::SaveToFile(const std::filesystem::path& destination, const EImageTyp
 {
 	const EImageType encoderImageType = SelectEncoderImageType(type);
 	const ComPtr<IWICStream> outputStream = GetStream(m_factory, destination);
+
+	const Configuration configuration { .type = encoderImageType, .quality = imageQuality, .destination = m_bitmap.Get() };
 	const ComPtr<IWICBitmapEncoder> encoder = GetEncoder(outputStream, encoderImageType);
 
-	SaveEncoderData(encoder, imageQuality);
+	SaveEncoderData(encoder, configuration);
 }
 
 
@@ -265,7 +256,7 @@ void Image::Scale(const unsigned int width, const unsigned int height)
 	const ComPtr<IWICStream> outputStream = GetStream(m_factory);
 	const ComPtr<IWICBitmapEncoder> encoder = GetEncoder(outputStream, SelectEncoderImageType(m_imageType));
 
-	SaveEncoderData(encoder, scaledBitmap);
+	SaveEncoderData(encoder, { .destination = scaledBitmap.Get() });
 	m_bitmap.Reset();
 
 	if (const HRESULT res = m_factory->CreateBitmapFromSource(scaledBitmap.Get(), WICBitmapCacheOnDemand, m_bitmap.GetAddressOf());
@@ -282,7 +273,8 @@ void Image::SaveToBuffer(std::vector<uint8_t>& buffer, const EImageType type, co
 	const ComPtr<IWICStream> stream = GetStream(m_factory);
 	const ComPtr<IWICBitmapEncoder> encoder = GetEncoder(stream, encoderImageType);
 
-	SaveEncoderData(encoder, encoderImageType, imageQuality);
+	const Configuration configuration { .type = encoderImageType, .quality = imageQuality, .destination = m_bitmap.Get() };
+	SaveEncoderData(encoder, configuration);
 	SaveToBufferDetails(buffer, stream);
 }
 
@@ -312,201 +304,5 @@ void Image::SaveToBufferDetails(std::vector<uint8_t>& buffer, const ComPtr<IWICS
 		buffer.clear();
 
 		throw Exception(GetErrorMsg("Stream::Read", res));
-	}
-}
-
-
-void Image::SaveToBuffer(std::vector<char>& buffer, const EImageType type, const int imageQuality) const
-{
-	const EImageType encoderImageType = SelectEncoderImageType(type);
-	const ComPtr<IWICStream> stream = GetStream(m_factory);
-	const ComPtr<IWICBitmapEncoder> encoder = GetEncoder(stream, encoderImageType);
-
-	SaveEncoderData(encoder, encoderImageType, imageQuality);
-	SaveToBufferDetails(buffer, stream);
-}
-
-
-void Image::SaveToBufferDetails(std::vector<char>& buffer, const ComPtr<IWICStream>& stream)
-{
-	buffer.clear();
-	STATSTG stats{};
-
-	if (const HRESULT res = stream->Stat(&stats, STATFLAG_NONAME); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Stream::Stat", res));
-	}
-
-	constexpr LARGE_INTEGER zero{};
-
-	if (const HRESULT res = stream->Seek(zero, STREAM_SEEK_SET, nullptr); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("Stream::Seek", res));
-	}
-
-	ULONG bytesRead = 0;
-	buffer.resize(static_cast<size_t>(stats.cbSize.QuadPart));
-
-	if (const HRESULT res = stream->Read(buffer.data(), static_cast<ULONG>(buffer.size()), &bytesRead); FAILED(res))
-	{
-		buffer.clear();
-
-		throw Exception(GetErrorMsg("Stream::Read", res));
-	}
-}
-
-
-ComPtr<IWICBitmapEncoder> Image::GetEncoder(const ComPtr<IWICStream>& stream, const EImageType type)
-{
-	ComPtr<IWICBitmapEncoder> encoder = nullptr;
-
-	if (const HRESULT res = ::CoCreateInstance(g_imageTypeEncoderDictionary.at(type), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(encoder.GetAddressOf())); 
-		FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapEncoder::CoCreateInstance", res));
-	}
-
-	if (const HRESULT res = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapEncoder::Initialize", res));
-	}
-
-	return encoder;
-}
-
-
-void Image::SetImageQuality(const int imageQuality, const ComPtr<IPropertyBag2>& properties)
-{
-	const float imageQualityValue = std::truncf(static_cast<float>(imageQuality)) / 100;\
-	VARIANT value;
-	::VariantInit(&value);
-	value.vt = VT_R8;
-	value.dblVal = static_cast<double>(imageQualityValue);
-
-	PROPBAG2 data{};
-	data.dwType = PROPBAG2_TYPE_DATA;
-	data.vt = VT_R8;
-	data.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
-	
-	const HRESULT res = properties->Write(1, &data, &value);
-
-	::VariantClear(&value);
-
-	if (FAILED(res))
-	{
-		throw Exception(GetErrorMsg("IPropertyBag2::Write", res));
-	}
-}
-
-
-void Image::SaveEncoderData(const ComPtr<IWICBitmapEncoder>& encoder, const EImageType type, const int imageQuality) const
-{
-	ComPtr<IPropertyBag2> properties;
-	ComPtr<IWICBitmapFrameEncode> targetFrame;
-
-	if (const HRESULT res = encoder->CreateNewFrame(targetFrame.GetAddressOf(), properties.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapEncoder::CreateNewFrame", res));
-	}
-
-	if (type == EImageType::Jpeg && imageQuality > 0 && imageQuality <= 100)
-	{
-		SetImageQuality(imageQuality, properties);
-	}
-
-	if (const HRESULT res = targetFrame->Initialize(properties.Get()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::Initialize", res));
-	}
-
-	if (const HRESULT res = targetFrame->WriteSource(m_bitmap.Get(), nullptr); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::WriteSource", res));
-	}
-
-	if (const HRESULT res = targetFrame->Commit(); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::Commit", res));
-	}
-
-	if (const HRESULT res = encoder->Commit(); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapEncoder::Commit", res));
-	}
-}
-
-
-void Image::SaveEncoderData(const ComPtr<IWICBitmapEncoder>& encoder, const ComPtr<IWICBitmapScaler>& scaledBitmap)
-{
-	ComPtr<IPropertyBag2> properties;
-	ComPtr<IWICBitmapFrameEncode> targetFrame;
-
-	if (const HRESULT res = encoder->CreateNewFrame(targetFrame.GetAddressOf(), properties.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapEncoder::CreateNewFrame", res));
-	}
-
-	if (const HRESULT res = targetFrame->Initialize(properties.Get()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::Initialize", res));
-	}
-
-	if (const HRESULT res = targetFrame->WriteSource(scaledBitmap.Get(), nullptr); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::WriteSource", res));
-	}
-
-	if (const HRESULT res = targetFrame->Commit(); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::Commit", res));
-	}
-
-	if (const HRESULT res = encoder->Commit(); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapEncoder::Commit", res));
-	}
-}
-
-
-void Image::SaveEncoderData(const ComPtr<IWICBitmapEncoder>& encoder, const bool asGraysScale) const
-{
-	ComPtr<IPropertyBag2> properties;
-	ComPtr<IWICBitmapFrameEncode> targetFrame;
-
-	const std::string functionName = std::source_location::current().function_name();
-
-	if (const HRESULT res = encoder->CreateNewFrame(targetFrame.GetAddressOf(), properties.GetAddressOf()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapEncoder::CreateNewFrame", res));
-	}
-
-	if (const HRESULT res = targetFrame->Initialize(properties.Get()); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::Initialize", res));
-	}
-
-	if (asGraysScale)
-	{
-		auto grayScalePixelFormat = GUID_WICPixelFormat32bppGrayFixedPoint;
-
-		if (const HRESULT res = targetFrame->SetPixelFormat(&grayScalePixelFormat); FAILED(res))
-		{
-			throw Exception(GetErrorMsg("BitmapFrameEncode::SetPixelFormat", res));
-		}
-	}
-
-	if (const HRESULT res = targetFrame->WriteSource(m_bitmap.Get(), nullptr); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::WriteSource", res));
-	}
-
-	if (const HRESULT res = targetFrame->Commit(); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapFrameEncode::Commit", res));
-	}
-
-	if (const HRESULT res = encoder->Commit(); FAILED(res))
-	{
-		throw Exception(GetErrorMsg("BitmapEncoder::Commit", res));
 	}
 }

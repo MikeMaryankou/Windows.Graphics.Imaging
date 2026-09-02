@@ -1,6 +1,5 @@
 #include "pch.h"
 #include "Decoder.h"
-#include "Stream.h"
 #include "Common.h"
 
 
@@ -9,20 +8,35 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
-	const std::map<WIC::EImageType, IID> g_imageTypeDecoderDictionary =
+	constexpr auto GUID_STRING_FMT = "{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}";
+	
+	
+	std::map<WIC::EImageType, IID> GetImageTypeDecoderDictionary()
 	{
-		{WIC::EImageType::Bmp, CLSID_WICBmpDecoder},
-		{WIC::EImageType::Gif, CLSID_WICGifDecoder},
-		{WIC::EImageType::Jpeg, CLSID_WICJpegDecoder},
-		{WIC::EImageType::Png, CLSID_WICPngDecoder},
-		{WIC::EImageType::Tiff, CLSID_WICTiffDecoder},
+		static const std::map<WIC::EImageType, IID> imageTypeDecoderDictionary =
+		{
+			{WIC::EImageType::Bmp, CLSID_WICBmpDecoder},
+			{WIC::EImageType::Gif, CLSID_WICGifDecoder},
+			{WIC::EImageType::Jpeg, CLSID_WICJpegDecoder},
+			{WIC::EImageType::Png, CLSID_WICPngDecoder},
+			{WIC::EImageType::Tiff, CLSID_WICTiffDecoder},
+		};
+		
+		return imageTypeDecoderDictionary;
+	}
+
+
+	std::string GuidStringify(const GUID guid)
+	{
+		return std::format(GUID_STRING_FMT, guid.Data1, guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1],
+			guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
 	};
 }
 
 
 ComPtr<IWICBitmapDecoder> WIC::GetDecoder(const ComPtr<IWICImagingFactory>& factory, const ComPtr<IWICStream>& stream)
 {
-	for (const auto& [type, guid] : g_imageTypeDecoderDictionary)
+	for (const auto& guid : GetImageTypeDecoderDictionary() | std::views::values)
 	{
 		ComPtr<IWICBitmapDecoder> decoder = nullptr;
 
@@ -79,20 +93,13 @@ WIC::EImageType WIC::GetImageType(const ComPtr<IWICBitmapDecoder>& decoder)
 		throw Exception(GetErrorMsg("DecoderInfo::GetCLSID", res));
 	}
 
-	for (const auto& [type, guid] : g_imageTypeDecoderDictionary)
+	for (const auto& [type, guid] : GetImageTypeDecoderDictionary())
 	{
 		if (guid == sid)
 		{
 			return type;
 		}
 	}
-
-	auto stringFromGuid = [](const GUID guid)
-		{
-			return std::format("{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-				guid.Data1, guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1],
-				guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
-		};
-
-	throw Exception(std::format("DecoderInfo return unsupported sid [{}]", stringFromGuid(sid)));
+	
+	throw Exception(std::format("DecoderInfo return unsupported sid [{}]", GuidStringify(sid)));
 }

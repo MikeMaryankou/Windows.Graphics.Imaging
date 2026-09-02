@@ -4,7 +4,7 @@ namespace WIC
 {
 	using Microsoft::WRL::ComPtr;
 
-	ComPtr<IWICStream> GetStream(const ComPtr<IWICImagingFactory>& factory, const Microsoft::WRL::ComPtr<IStream>& buffer);
+	ComPtr<IWICStream> GetStream(const ComPtr<IWICImagingFactory>& factory, const ComPtr<IStream>& buffer);
 
 	ComPtr<IWICStream> GetStream(const ComPtr<IWICImagingFactory>& factory);
 
